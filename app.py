@@ -4,6 +4,7 @@ import pandas as pd
 import re
 from datetime import datetime, timedelta
 import io
+import base64
 from PIL import Image
 
 # ==========================================
@@ -43,10 +44,10 @@ def init_db():
                   status_laundry TEXT,
                   jumlah_bungkus INT,
                   tgl_selesai TEXT,
-                  foto_jemur BLOB,
-                  foto_lipat BLOB)''')
+                  foto_jemur TEXT,
+                  foto_lipat TEXT)''')
 
-    # Migrasi Kolom Transaksi
+    # Migrasi Kolom Transaksi (jika database lama)
     c.execute("PRAGMA table_info(transaksi)")
     cols_t = [col[1] for col in c.fetchall()]
     if 'kode_nota' not in cols_t:
@@ -54,9 +55,9 @@ def init_db():
     if 'tgl_estimasi_selesai' not in cols_t:
         c.execute("ALTER TABLE transaksi ADD COLUMN tgl_estimasi_selesai TEXT")
     if 'foto_jemur' not in cols_t:
-        c.execute("ALTER TABLE transaksi ADD COLUMN foto_jemur BLOB")
+        c.execute("ALTER TABLE transaksi ADD COLUMN foto_jemur TEXT")
     if 'foto_lipat' not in cols_t:
-        c.execute("ALTER TABLE transaksi ADD COLUMN foto_lipat BLOB")
+        c.execute("ALTER TABLE transaksi ADD COLUMN foto_lipat TEXT")
 
     # Tabel Master Layanan
     c.execute('''CREATE TABLE IF NOT EXISTS master_layanan 
@@ -149,9 +150,17 @@ def generate_kode_nota(tgl_dt):
 
     return f"{prefix}{new_counter:03d}"
 
-def process_img_bytes(img_file):
+def process_img_to_base64(img_file):
     if img_file is not None:
-        return img_file.getvalue()
+        try:
+            image = Image.open(img_file)
+            image.thumbnail((800, 800)) # Kompres ukuran gambar agar ringan
+            buffered = io.BytesIO()
+            image.save(buffered, format="JPEG", quality=70)
+            return base64.b64encode(buffered.getvalue()).decode()
+        except Exception as e:
+            st.error(f"Gagal memproses foto: {e}")
+            return None
     return None
 
 # JS Script Web Bluetooth Universal untuk Thermal Printer ESC/POS
@@ -224,7 +233,6 @@ def logout_user():
     st.session_state["user_info"] = None
     st.rerun()
 
-# JIKA BELUM LOGIN, TAMPILKAN FORM LOGIN
 if not st.session_state["logged_in"]:
     st.markdown("<h2 style='text-align: center;'>🧺 LOGIN SM LAUNDRY</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center;'>Silakan masukkan Username dan Password Anda</p>", unsafe_allow_html=True)
@@ -462,7 +470,6 @@ st.title("🧺 SM LAUNDRY")
 st.markdown("**Jl. Maritim 28 Socah Bangkalan** | 📞 **WA:** 085257357246")
 st.divider()
 
-# MENUS SESUAI ROLE
 if user_role == "owner":
     list_menu = [
         "🏠 Beranda / Dashboard", 
@@ -652,8 +659,7 @@ elif menu == "🔍 Tracking Nota & Foto Dokumentasi":
             st.markdown("### ☀️ 1. Foto Saat Dijemur")
             if foto_jemur:
                 try:
-                    img_j = Image.open(io.BytesIO(foto_jemur))
-                    st.image(img_j, caption=f"Bukti Penjemuran Nota {kd_tampil}", use_container_width=True)
+                    st.image(f"data:image/jpeg;base64,{foto_jemur}", caption=f"Bukti Penjemuran Nota {kd_tampil}", use_container_width=True)
                 except Exception as e:
                     st.error("Gagal menampilkan foto jemur.")
             else:
@@ -663,8 +669,7 @@ elif menu == "🔍 Tracking Nota & Foto Dokumentasi":
             st.markdown("### 🧺 2. Foto Selesai Dilipat")
             if foto_lipat:
                 try:
-                    img_l = Image.open(io.BytesIO(foto_lipat))
-                    st.image(img_l, caption=f"Bukti Selesai Lipat Nota {kd_tampil}", use_container_width=True)
+                    st.image(f"data:image/jpeg;base64,{foto_lipat}", caption=f"Bukti Selesai Lipat Nota {kd_tampil}", use_container_width=True)
                 except Exception as e:
                     st.error("Gagal menampilkan foto lipat.")
             else:
@@ -781,21 +786,28 @@ elif menu == "📝 POS / Kasir Baru":
                     st.session_state['last_trx_id'] = nota_db_id
                     st.success(f"✅ Transaksi **{kode_nota_preview}** berhasil disimpan!")
 
+                    # FORMAT PESAN WA LENGKAP SESUAI NOTA
                     wa_phone = clean_phone(no_hp)
                     pesan_wa = (
-                        f"*SM LAUNDRY* 🧺%0A"
-                        f"_Jl. Maritim 28 Socah Bangkalan | WA: 085257357246_%0A%0A"
-                        f"Halo Kak *{nama}*, terima kasih! ✨%0A%0A"
-                        f"📄 *Detail Transaksi:*%0A"
-                        f"• No. Nota: *{kode_nota_preview}*%0A"
-                        f"• Tgl Masuk: {waktu_sekarang.strftime('%d/%m/%Y %H:%M')}%0A"
-                        f"• Est. Selesai: *{waktu_estimasi.strftime('%d/%m/%Y %H:%M')}*%0A"
-                        f"• Layanan: {nama_layanan_full} ({berat} {satuan_text})%0A"
-                        f"• Total Tagihan: Rp {total_harga:,}%0A"
-                        f"• *Sisa Pembayaran: Rp {sisa_bayar:,}*%0A%0A"
-                        f"Terima kasih! 🙏"
+                        f"Halo Kak *{nama}*, terima kasih telah mencuci di *SM Laundry*! ✨%0A%0A"
+                        f"Berikut rincian nota transaksi Anda:%0A%0A"
+                        f"🧾 *NOTA LAUNDRY: #{kode_nota_preview}*%0A"
+                        f"📅 *Tgl Masuk:* {waktu_sekarang.strftime('%d/%m/%Y %H:%M')}%0A"
+                        f"⏰ *Estimasi Selesai:* {waktu_estimasi.strftime('%d/%m/%Y %H:%M')}%0A%0A"
+                        f"*Detail Layanan:*%0A"
+                        f"• Layanan: {nama_layanan_full}%0A"
+                        f"• Jumlah/Berat: {berat} {satuan_text}%0A"
+                        f"• Pilihan Parfum: {parfum}%0A"
+                        f"• Catatan: {catatan if catatan else '-'}%0A%0A"
+                        f"💵 *Total Biaya:* Rp {total_harga:,}%0A"
+                        f"💳 *Status Bayar:* {status_bayar}%0A"
+                        f"💰 *DP/Bayar:* Rp {dp_val:,}%0A"
+                        f"⚠️ *SISA BAYAR: Rp {sisa_bayar:,}*%0A%0A"
+                        f"📍 _SM Laundry - Jl. Maritim 28 Socah Bangkalan_%0A"
+                        f"📞 _WA: 085257357246_%0A%0A"
+                        f"Terima kasih atas kepercayaan Anda! 🙏"
                     )
-                    st.markdown(f"👉 [**📱 KLIK UNTUK KIRIM STRUK WA**](https://wa.me/{wa_phone}?text={pesan_wa})")
+                    st.markdown(f"👉 [**📱 KLIK UNTUK KIRIM STRUK WA PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_wa})")
 
         if 'last_trx_id' in st.session_state:
             st.divider()
@@ -904,16 +916,16 @@ elif menu == "🔄 Papan Status Produksi":
                         foto_jemur_file = st.file_uploader("Upload Foto Pakaian Dijemur", type=["jpg", "jpeg", "png"], key=f"upl_j_{row['id']}")
 
                     if st.button("Lanjut Setrika ➔ (Simpan Foto Jemur)", key=f"btn_strk_{row['id']}"):
-                        img_bytes = process_img_bytes(foto_jemur_file)
+                        img_b64_jemur = process_img_to_base64(foto_jemur_file)
                         conn = get_connection()
                         c = conn.cursor()
-                        if img_bytes:
-                            c.execute("UPDATE transaksi SET status_laundry = 'Disetrika', foto_jemur = ? WHERE id = ?", (img_bytes, row['id']))
+                        if img_b64_jemur:
+                            c.execute("UPDATE transaksi SET status_laundry = 'Disetrika', foto_jemur = ? WHERE id = ?", (img_b64_jemur, row['id']))
                         else:
                             c.execute("UPDATE transaksi SET status_laundry = 'Disetrika' WHERE id = ?", (row['id'],))
                         conn.commit()
                         conn.close()
-                        st.success("✅ Foto penjemuran tersimpan dan status diperbarui!")
+                        st.success("✅ Foto penjemuran tersimpan permanen & status diperbarui!")
                         st.rerun()
 
         with tab3:
@@ -932,19 +944,28 @@ elif menu == "🔄 Papan Status Produksi":
                         else:
                             foto_lipat_file = st.file_uploader("Upload Foto Pakaian Dilipat/Terbungkus", type=["jpg", "jpeg", "png"], key=f"upl_l_{row['id']}")
 
-                        if st.form_submit_button("💾 Selesai & Kirim WA"):
-                            img_bytes_lipat = process_img_bytes(foto_lipat_file)
+                        if st.form_submit_button("💾 Selesai & Kirim Notifikasi WA"):
+                            img_b64_lipat = process_img_to_base64(foto_lipat_file)
                             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             conn = get_connection()
                             c = conn.cursor()
-                            if img_bytes_lipat:
-                                c.execute("UPDATE transaksi SET status_laundry = 'Selesai', jumlah_bungkus = ?, tgl_selesai = ?, foto_lipat = ? WHERE id = ?", (jml_bungkus, now_str, img_bytes_lipat, row['id']))
+                            if img_b64_lipat:
+                                c.execute("UPDATE transaksi SET status_laundry = 'Selesai', jumlah_bungkus = ?, tgl_selesai = ?, foto_lipat = ? WHERE id = ?", (jml_bungkus, now_str, img_b64_lipat, row['id']))
                             else:
                                 c.execute("UPDATE transaksi SET status_laundry = 'Selesai', jumlah_bungkus = ?, tgl_selesai = ? WHERE id = ?", (jml_bungkus, now_str, row['id']))
                             conn.commit()
                             conn.close()
-                            st.success("✅ Foto lipatan tersimpan dan laundry siap diambil!")
-                            st.rerun()
+
+                            wa_phone = clean_phone(row['no_hp'])
+                            pesan_selesai = (
+                                f"Halo Kak *{row['nama']}*, laundry Anda sudah *SELESAI* & siap diambil! 🧺✨%0A%0A"
+                                f"🧾 *No. Nota:* #{kd}%0A"
+                                f"📦 *Jumlah Bungkusan:* {jml_bungkus} Bungkusan/Bal%0A"
+                                f"💰 *Sisa Pembayaran:* Rp {row['sisa']:,}%0A%0A"
+                                f"Silakan datang ke *SM Laundry* untuk pengambilan ya Kak. Terima kasih! 🙏"
+                            )
+                            st.success("✅ Foto lipatan tersimpan permanen dan status laundry SELESAI!")
+                            st.markdown(f"👉 [**📱 KLIK UNTUK NOTIFIKASI WA SELESAI KE PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_selesai})")
 
         with tab4:
             for _, row in df[df['status_laundry'] == 'Selesai'].iterrows():
