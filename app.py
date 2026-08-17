@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import io
 import base64
 from PIL import Image
+import urllib.parse
 
 # ==========================================
 # 1. SETUP DATABASE & KONFIGURASI APLIKASI
@@ -786,28 +787,29 @@ elif menu == "📝 POS / Kasir Baru":
                     st.session_state['last_trx_id'] = nota_db_id
                     st.success(f"✅ Transaksi **{kode_nota_preview}** berhasil disimpan!")
 
-                    # FORMAT PESAN WA LENGKAP SESUAI NOTA
+                    # FORMAT PESAN WA LENGKAP MENGGUNAKAN URLLIB PARSE QUOTE
                     wa_phone = clean_phone(no_hp)
-                    pesan_wa = (
-                        f"Halo Kak *{nama}*, terima kasih telah mencuci di *SM Laundry*! ✨%0A%0A"
-                        f"Berikut rincian nota transaksi Anda:%0A%0A"
-                        f"🧾 *NOTA LAUNDRY: #{kode_nota_preview}*%0A"
-                        f"📅 *Tgl Masuk:* {waktu_sekarang.strftime('%d/%m/%Y %H:%M')}%0A"
-                        f"⏰ *Estimasi Selesai:* {waktu_estimasi.strftime('%d/%m/%Y %H:%M')}%0A%0A"
-                        f"*Detail Layanan:*%0A"
-                        f"• Layanan: {nama_layanan_full}%0A"
-                        f"• Jumlah/Berat: {berat} {satuan_text}%0A"
-                        f"• Pilihan Parfum: {parfum}%0A"
-                        f"• Catatan: {catatan if catatan else '-'}%0A%0A"
-                        f"💵 *Total Biaya:* Rp {total_harga:,}%0A"
-                        f"💳 *Status Bayar:* {status_bayar}%0A"
-                        f"💰 *DP/Bayar:* Rp {dp_val:,}%0A"
-                        f"⚠️ *SISA BAYAR: Rp {sisa_bayar:,}*%0A%0A"
-                        f"📍 _SM Laundry - Jl. Maritim 28 Socah Bangkalan_%0A"
-                        f"📞 _WA: 085257357246_%0A%0A"
+                    pesan_wa_raw = (
+                        f"Halo Kak *{nama}*, terima kasih telah mencuci di *SM Laundry*! ✨\n\n"
+                        f"Berikut rincian nota transaksi Anda:\n\n"
+                        f"🧾 *NOTA LAUNDRY: #{kode_nota_preview}*\n"
+                        f"📅 *Tgl Masuk:* {waktu_sekarang.strftime('%d/%m/%Y %H:%M')}\n"
+                        f"⏰ *Estimasi Selesai:* {waktu_estimasi.strftime('%d/%m/%Y %H:%M')}\n\n"
+                        f"*Detail Layanan:*\n"
+                        f"• Layanan: {nama_layanan_full}\n"
+                        f"• Jumlah/Berat: {berat} {satuan_text}\n"
+                        f"• Pilihan Parfum: {parfum}\n"
+                        f"• Catatan: {catatan if catatan else '-'}\n\n"
+                        f"💵 *Total Biaya:* Rp {total_harga:,}\n"
+                        f"💳 *Status Bayar:* {status_bayar}\n"
+                        f"💰 *DP/Bayar:* Rp {dp_val:,}\n"
+                        f"⚠️ *SISA BAYAR: Rp {sisa_bayar:,}*\n\n"
+                        f"📍 _SM Laundry - Jl. Maritim 28 Socah Bangkalan_\n"
+                        f"📞 _WA: 085257357246_\n\n"
                         f"Terima kasih atas kepercayaan Anda! 🙏"
                     )
-                    st.markdown(f"👉 [**📱 KLIK UNTUK KIRIM STRUK WA PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_wa})")
+                    pesan_wa_encoded = urllib.parse.quote(pesan_wa_raw)
+                    st.markdown(f"👉 [**📱 KLIK UNTUK KIRIM STRUK WA PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_wa_encoded})")
 
         if 'last_trx_id' in st.session_state:
             st.divider()
@@ -957,15 +959,16 @@ elif menu == "🔄 Papan Status Produksi":
                             conn.close()
 
                             wa_phone = clean_phone(row['no_hp'])
-                            pesan_selesai = (
-                                f"Halo Kak *{row['nama']}*, laundry Anda sudah *SELESAI* & siap diambil! 🧺✨%0A%0A"
-                                f"🧾 *No. Nota:* #{kd}%0A"
-                                f"📦 *Jumlah Bungkusan:* {jml_bungkus} Bungkusan/Bal%0A"
-                                f"💰 *Sisa Pembayaran:* Rp {row['sisa']:,}%0A%0A"
+                            pesan_selesai_raw = (
+                                f"Halo Kak *{row['nama']}*, laundry Anda sudah *SELESAI* & siap diambil! 🧺✨\n\n"
+                                f"🧾 *No. Nota:* #{kd}\n"
+                                f"📦 *Jumlah Bungkusan:* {jml_bungkus} Bungkusan/Bal\n"
+                                f"💰 *Sisa Pembayaran:* Rp {row['sisa']:,}\n\n"
                                 f"Silakan datang ke *SM Laundry* untuk pengambilan ya Kak. Terima kasih! 🙏"
                             )
+                            pesan_selesai_encoded = urllib.parse.quote(pesan_selesai_raw)
                             st.success("✅ Foto lipatan tersimpan permanen dan status laundry SELESAI!")
-                            st.markdown(f"👉 [**📱 KLIK UNTUK NOTIFIKASI WA SELESAI KE PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_selesai})")
+                            st.markdown(f"👉 [**📱 KLIK UNTUK NOTIFIKASI WA SELESAI KE PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_selesai_encoded})")
 
         with tab4:
             for _, row in df[df['status_laundry'] == 'Selesai'].iterrows():
