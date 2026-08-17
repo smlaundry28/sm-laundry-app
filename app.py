@@ -124,7 +124,9 @@ init_db()
 
 # Helper Functions
 def clean_phone(phone_str):
-    phone = phone_str.strip().replace("-", "").replace(" ", "").replace("+", "")
+    if not phone_str:
+        return ""
+    phone = str(phone_str).strip().replace("-", "").replace(" ", "").replace("+", "")
     if phone.startswith("0"):
         phone = "62" + phone[1:]
     return phone
@@ -155,7 +157,7 @@ def process_img_to_base64(img_file):
     if img_file is not None:
         try:
             image = Image.open(img_file)
-            image.thumbnail((800, 800)) # Kompres ukuran gambar agar ringan
+            image.thumbnail((800, 800))
             buffered = io.BytesIO()
             image.save(buffered, format="JPEG", quality=70)
             return base64.b64encode(buffered.getvalue()).decode()
@@ -164,7 +166,12 @@ def process_img_to_base64(img_file):
             return None
     return None
 
-# JS Script Web Bluetooth Universal untuk Thermal Printer ESC/POS
+def create_wa_link(no_hp, pesan_raw):
+    wa_phone = clean_phone(no_hp)
+    pesan_encoded = urllib.parse.quote(pesan_raw)
+    return f"https://wa.me/{wa_phone}?text={pesan_encoded}"
+
+# JS Script Web Bluetooth Universal
 JS_BLUETOOTH_PRINT = """
 <script>
 async function printBluetooth(rawText) {
@@ -458,7 +465,7 @@ def show_print_dialog(trx_id):
             )
 
 # ==========================================
-# 3. HEADER BRANDING & NAVIGASI BASED ON ROLE
+# 3. HEADER BRANDING & NAVIGASI
 # ==========================================
 user_info = st.session_state["user_info"]
 user_role = user_info["role"]
@@ -621,46 +628,63 @@ elif menu == "🔍 Tracking Nota & Foto Dokumentasi":
     st.header("🔍 Tracking Laundry & Foto Bukti Pengerjaan")
     
     conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT id, kode_nota, nama, no_hp, tgl_transaksi, tgl_estimasi_selesai, status_laundry, layanan, foto_jemur, foto_lipat FROM transaksi ORDER BY id DESC")
-    rows = c.fetchall()
+    df_trx_track = pd.read_sql_query("SELECT * FROM transaksi ORDER BY id DESC", conn)
     conn.close()
 
-    if not rows:
+    if df_trx_track.empty:
         st.info("ℹ️ Belum ada transaksi yang dapat diteliti.")
     else:
-        list_options = [f"{r[1] if r[1] else 'TRX/'+str(r[0])} - {r[2]} ({r[3]})" for r in rows]
-        selected_opt = st.selectbox("🔎 Cari berdasarkan Kode Nota / Nama Pelanggan:", list_options)
+        df_trx_track['kode_tampil'] = df_trx_track.apply(lambda r: r['kode_nota'] if r['kode_nota'] else f"TRX/{r['id']}", axis=1)
+        list_options = [f"{row['kode_tampil']} - {row['nama']} ({row['no_hp']})" for _, row in df_trx_track.iterrows()]
         
+        selected_opt = st.selectbox("🔎 Cari berdasarkan Kode Nota / Nama Pelanggan:", list_options)
         idx = list_options.index(selected_opt)
-        selected_data = rows[idx]
+        row = df_trx_track.iloc[idx]
 
-        trx_id, kode_nota, nama, no_hp, tgl_masuk, tgl_est, status_laundry, layanan, foto_jemur, foto_lipat = selected_data
-        kd_tampil = kode_nota if kode_nota else f"TRX/{trx_id}"
-
-        st.subheader(f"📋 Status Pesanan: {kd_tampil}")
+        st.subheader(f"📋 Status Pesanan: {row['kode_tampil']}")
         
         col_t1, col_t2, col_t3 = st.columns(3)
         with col_t1:
-            st.write(f"👤 **Pelanggan:** {nama}")
-            st.write(f"📞 **WhatsApp:** {no_hp}")
+            st.write(f"👤 **Pelanggan:** {row['nama']}")
+            st.write(f"📞 **WhatsApp:** {row['no_hp']}")
         with col_t2:
-            st.write(f"⚙️ **Layanan:** {layanan}")
-            st.write(f"🔄 **Status Saat Ini:** `{status_laundry}`")
+            st.write(f"⚙️ **Layanan:** {row['layanan']}")
+            st.write(f"🔄 **Status Saat Ini:** `{row['status_laundry']}`")
         with col_t3:
-            st.write(f"📅 **Tanggal Masuk:** {tgl_masuk}")
-            st.write(f"🎯 **Target Selesai:** {tgl_est}")
+            st.write(f"📅 **Tanggal Masuk:** {row['tgl_transaksi']}")
+            st.write(f"🎯 **Target Selesai:** {row['tgl_estimasi_selesai']}")
+
+        # **PERBAIKAN: Tombol Kirim Ulang WA Struk**
+        pesan_wa_ulang = (
+            f"Halo Kak *{row['nama']}*, berikut rincian nota transaksi Anda di *SM Laundry*:\n\n"
+            f"🧾 *NOTA LAUNDRY: #{row['kode_tampil']}*\n"
+            f"📅 *Tgl Masuk:* {row['tgl_transaksi']}\n"
+            f"⏰ *Estimasi Selesai:* {row['tgl_estimasi_selesai']}\n\n"
+            f"*Detail Layanan:*\n"
+            f"• Layanan: {row['layanan']}\n"
+            f"• Jumlah/Berat: {row['berat']}\n"
+            f"• Pilihan Parfum: {row['parfum']}\n"
+            f"• Catatan: {row['catatan'] if row['catatan'] else '-'}\n\n"
+            f"💵 *Total Biaya:* Rp {row['total']:,}\n"
+            f"💳 *Status Bayar:* {row['status_bayar']}\n"
+            f"💰 *DP/Bayar:* Rp {row['bayar_dp']:,}\n"
+            f"⚠️ *SISA BAYAR: Rp {row['sisa']:,}*\n\n"
+            f"📍 _SM Laundry - Jl. Maritim 28 Socah Bangkalan_\n"
+            f"📞 _WA: 085257357246_\n\n"
+            f"Terima kasih!"
+        )
+        url_wa_ulang = create_wa_link(row['no_hp'], pesan_wa_ulang)
+        st.markdown(f"👉 [**📱 KIRIM ULANG NOTA WA KEPADA PELANGGAN**]({url_wa_ulang})")
 
         st.divider()
         st.subheader("📸 Foto Bukti Proses Produksi")
 
         col_f1, col_f2 = st.columns(2)
-        
         with col_f1:
             st.markdown("### ☀️ 1. Foto Saat Dijemur")
-            if foto_jemur:
+            if row['foto_jemur']:
                 try:
-                    st.image(f"data:image/jpeg;base64,{foto_jemur}", caption=f"Bukti Penjemuran Nota {kd_tampil}", use_container_width=True)
+                    st.image(f"data:image/jpeg;base64,{row['foto_jemur']}", caption=f"Bukti Penjemuran Nota {row['kode_tampil']}", use_container_width=True)
                 except Exception as e:
                     st.error("Gagal menampilkan foto jemur.")
             else:
@@ -668,35 +692,46 @@ elif menu == "🔍 Tracking Nota & Foto Dokumentasi":
 
         with col_f2:
             st.markdown("### 🧺 2. Foto Selesai Dilipat")
-            if foto_lipat:
+            if row['foto_lipat']:
                 try:
-                    st.image(f"data:image/jpeg;base64,{foto_lipat}", caption=f"Bukti Selesai Lipat Nota {kd_tampil}", use_container_width=True)
+                    st.image(f"data:image/jpeg;base64,{row['foto_lipat']}", caption=f"Bukti Selesai Lipat Nota {row['kode_tampil']}", use_container_width=True)
                 except Exception as e:
                     st.error("Gagal menampilkan foto lipat.")
             else:
                 st.info("📷 Foto hasil lipatan/pembungkusan belum diunggah oleh staf.")
 
 # ==========================================
-# MODUL 1: POS / KASIR BARU
+# MODUL 1: POS / KASIR BARU (FIX BUG REFRESH & TOTAL HP)
 # ==========================================
 elif menu == "📝 POS / Kasir Baru":
     st.header("📝 Transaksi Kasir Baru")
 
     conn = get_connection()
-    df_pelanggan = pd.read_sql_query("SELECT * FROM master_pelanggan ORDER BY nama ASC", conn)
+    df_pelanggan = pd.read_sql_query("SELECT id, nama, no_hp FROM master_pelanggan ORDER BY nama ASC", conn)
     df_layanan = pd.read_sql_query("SELECT * FROM master_layanan ORDER BY kategori, nama_layanan ASC", conn)
     df_parfum = pd.read_sql_query("SELECT * FROM master_parfum ORDER BY nama_parfum ASC", conn)
     conn.close()
 
-    opsi_pembeli = st.radio("🔍 Pilihan Input Pelanggan:", ["➕ Pelanggan Baru", "🔎 Cari Pelanggan Terdaftar"], horizontal=True)
+    # **PERBAIKAN BUG HP 2: DAFTAR PELANGGAN TAMPIL DENGAN BENAR**
+    opsi_pembeli = st.radio(
+        "🔍 Pilihan Input Pelanggan:", 
+        ["➕ Pelanggan Baru", "🔎 Cari Pelanggan Terdaftar"], 
+        horizontal=True,
+        key="radio_opsi_pembeli"
+    )
 
     default_nama, default_hp = "", ""
 
-    if opsi_pembeli == "🔎 Cari Pelanggan Terdaftar" and not df_pelanggan.empty:
-        dict_pelanggan = {f"{row['nama']} ({row['no_hp']})": (row['nama'], row['no_hp']) for _, row in df_pelanggan.iterrows()}
-        selected_pel_str = st.selectbox("👤 Ketik Nama atau No. WA Pelanggan:", options=list(dict_pelanggan.keys()))
-        if selected_pel_str:
-            default_nama, default_hp = dict_pelanggan[selected_pel_str]
+    if opsi_pembeli == "🔎 Cari Pelanggan Terdaftar":
+        if not df_pelanggan.empty:
+            pelanggan_list = [f"{r['nama']} ({r['no_hp']})" for _, r in df_pelanggan.iterrows()]
+            selected_pel_str = st.selectbox("👤 Pilih/Ketik Nama Pelanggan:", options=pelanggan_list, key="sel_pelanggan_registered")
+            if selected_pel_str:
+                sel_idx = pelanggan_list.index(selected_pel_str)
+                default_nama = df_pelanggan.iloc[sel_idx]['nama']
+                default_hp = df_pelanggan.iloc[sel_idx]['no_hp']
+        else:
+            st.warning("⚠️ Belum ada master data pelanggan terdaftar. Silakan pilih 'Pelanggan Baru'.")
 
     st.markdown("---")
     
@@ -707,17 +742,17 @@ elif menu == "📝 POS / Kasir Baru":
         col_kat, col_lay, col_tip = st.columns(3)
         
         with col_kat:
-            kat_selected = st.selectbox("📁 Kategori Layanan*", kategori_list)
+            kat_selected = st.selectbox("📁 Kategori Layanan*", kategori_list, key="kat_pos")
         
         df_filtered_kat = df_layanan[df_layanan['kategori'] == kat_selected]
         with col_lay:
-            lay_selected = st.selectbox("🏷️ Nama Layanan*", df_filtered_kat['nama_layanan'].unique().tolist())
+            lay_selected = st.selectbox("🏷️ Nama Layanan*", df_filtered_kat['nama_layanan'].unique().tolist(), key="lay_pos")
             
         df_filtered_lay = df_filtered_kat[df_filtered_kat['nama_layanan'] == lay_selected]
         tipe_options = [f"{row['tipe']} ({row['durasi']}) - Rp {row['harga']:,}/{row['satuan']}" for _, row in df_filtered_lay.iterrows()]
         
         with col_tip:
-            tipe_selected_str = st.selectbox("⚡ Tipe Layanan & Durasi*", tipe_options)
+            tipe_selected_str = st.selectbox("⚡ Tipe Layanan & Durasi*", tipe_options, key="tip_pos")
             
         selected_layanan_data = df_filtered_lay.iloc[tipe_options.index(tipe_selected_str)]
         satuan_text = selected_layanan_data['satuan']
@@ -734,82 +769,82 @@ elif menu == "📝 POS / Kasir Baru":
 
         list_parfum = df_parfum['nama_parfum'].tolist() if not df_parfum.empty else ["Fresh Lavender", "Tanpa Parfum"]
 
-        with st.form("form_pos", clear_on_submit=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                nama = st.text_input("Nama Pelanggan*", value=default_nama)
-                no_hp = st.text_input("No. WhatsApp*", value=default_hp)
-                berat = st.number_input(f"Jumlah / Berat ({satuan_text})*", min_value=0.1, step=0.1, value=1.0)
-            with col2:
-                parfum = st.selectbox("Pilih Parfum*", list_parfum)
-                status_bayar = st.radio("Status Pembayaran*", ["LUNAS", "BELUM BAYAR", "DP"], horizontal=True)
-                bayar_dp = st.number_input("Nominal DP (Jika DP)", min_value=0, step=1000, value=0)
+        # **PERBAIKAN BUG HP 1: DIKELUARKAN DARI FORM SUPAYA DYNAMIC UPDATE (REALTIME TOTAL BIAYA)**
+        col1, col2 = st.columns(2)
+        with col1:
+            nama = st.text_input("Nama Pelanggan*", value=default_nama, key="pos_nama")
+            no_hp = st.text_input("No. WhatsApp*", value=default_hp, key="pos_hp")
+            berat = st.number_input(f"Jumlah / Berat ({satuan_text})*", min_value=0.1, step=0.1, value=1.0, key="pos_berat")
+        with col2:
+            parfum = st.selectbox("Pilih Parfum*", list_parfum, key="pos_parfum")
+            status_bayar = st.radio("Status Pembayaran*", ["LUNAS", "BELUM BAYAR", "DP"], horizontal=True, key="pos_status_bayar")
+            bayar_dp = st.number_input("Nominal DP (Jika DP)", min_value=0, step=1000, value=0, key="pos_dp")
 
-            st.markdown("---")
-            c1, c2 = st.columns(2)
-            with c1:
-                chk_underwear = st.checkbox("✅ Bebas pakaian dalam (underwear)")
-                chk_kantong = st.checkbox("✅ Kantong pakaian sudah diperiksa")
-            with c2:
-                baju_putih = st.radio("Ada Baju Putih?", ["Tidak", "Ya"], horizontal=True)
-                dress_sensitif = st.radio("Ada Dress / Bahan Sensitif?", ["Tidak", "Ya"], horizontal=True)
+        # HITUNG TOTAL SECARA DYNAMIS REAL-TIME
+        total_harga = int(berat * harga_per_satuan)
+        dp_val = total_harga if status_bayar == "LUNAS" else (int(bayar_dp) if status_bayar == "DP" else 0)
+        sisa_bayar = total_harga - dp_val
 
-            catatan = st.text_area("Catatan Khusus")
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        with c1:
+            chk_underwear = st.checkbox("✅ Bebas pakaian dalam (underwear)", key="pos_chk1")
+            chk_kantong = st.checkbox("✅ Kantong pakaian sudah diperiksa", key="pos_chk2")
+        with c2:
+            baju_putih = st.radio("Ada Baju Putih?", ["Tidak", "Ya"], horizontal=True, key="pos_putih")
+            dress_sensitif = st.radio("Ada Dress / Bahan Sensitif?", ["Tidak", "Ya"], horizontal=True, key="pos_dress")
 
-            total_harga = int(berat * harga_per_satuan)
-            dp_val = total_harga if status_bayar == "LUNAS" else (int(bayar_dp) if status_bayar == "DP" else 0)
-            sisa_bayar = total_harga - dp_val
+        catatan = st.text_area("Catatan Khusus", key="pos_catatan")
 
-            st.markdown(f"### 💵 **Total:** Rp {total_harga:,} | **Sisa:** Rp {sisa_bayar:,}")
+        # INDIKATOR HIGHLIGHT TOTAL BIAYA UNTUK HP
+        st.markdown(f"### 💵 **Total Biaya: Rp {total_harga:,}** | **Sisa Bayar: Rp {sisa_bayar:,}**")
 
-            if st.form_submit_button("💾 Simpan Transaksi Baru"):
-                if not (chk_underwear and chk_kantong):
-                    st.error("❌ Peringatan Safety: Kasir WAJIB memeriksa pakaian dalam & kantong!")
-                elif not nama or not no_hp:
-                    st.error("❌ Nama & WhatsApp wajib diisi.")
-                else:
-                    tgl_masuk_str = waktu_sekarang.strftime("%Y-%m-%d %H:%M:%S")
-                    tgl_est_str = waktu_estimasi.strftime("%Y-%m-%d %H:%M:%S")
+        if st.button("💾 **SIMPAN TRANSAKSI BARU**", type="primary", use_container_width=True):
+            if not (chk_underwear and chk_kantong):
+                st.error("❌ Peringatan Safety: Kasir WAJIB memeriksa pakaian dalam & kantong!")
+            elif not nama or not no_hp:
+                st.error("❌ Nama & WhatsApp wajib diisi.")
+            else:
+                tgl_masuk_str = waktu_sekarang.strftime("%Y-%m-%d %H:%M:%S")
+                tgl_est_str = waktu_estimasi.strftime("%Y-%m-%d %H:%M:%S")
 
-                    conn = get_connection()
-                    c = conn.cursor()
-                    c.execute("INSERT OR IGNORE INTO master_pelanggan (nama, no_hp, created_at) VALUES (?, ?, ?)", (nama, no_hp, tgl_masuk_str))
-                    c.execute("UPDATE master_pelanggan SET nama = ? WHERE no_hp = ?", (nama, no_hp))
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute("INSERT OR IGNORE INTO master_pelanggan (nama, no_hp, created_at) VALUES (?, ?, ?)", (nama, no_hp, tgl_masuk_str))
+                c.execute("UPDATE master_pelanggan SET nama = ? WHERE no_hp = ?", (nama, no_hp))
 
-                    c.execute('''INSERT INTO transaksi 
-                                 (kode_nota, tgl_transaksi, tgl_estimasi_selesai, nama, no_hp, layanan, berat, parfum, baju_putih, dress_sensitif, catatan, total, status_bayar, bayar_dp, sisa, status_laundry, jumlah_bungkus) 
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                              (kode_nota_preview, tgl_masuk_str, tgl_est_str, nama, no_hp, nama_layanan_full, berat, parfum, baju_putih, dress_sensitif, catatan, total_harga, status_bayar, dp_val, sisa_bayar, "Diterima", 0))
-                    conn.commit()
-                    nota_db_id = c.lastrowid
-                    conn.close()
+                c.execute('''INSERT INTO transaksi 
+                             (kode_nota, tgl_transaksi, tgl_estimasi_selesai, nama, no_hp, layanan, berat, parfum, baju_putih, dress_sensitif, catatan, total, status_bayar, bayar_dp, sisa, status_laundry, jumlah_bungkus) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                          (kode_nota_preview, tgl_masuk_str, tgl_est_str, nama, no_hp, nama_layanan_full, berat, parfum, baju_putih, dress_sensitif, catatan, total_harga, status_bayar, dp_val, sisa_bayar, "Diterima", 0))
+                conn.commit()
+                nota_db_id = c.lastrowid
+                conn.close()
 
-                    st.session_state['last_trx_id'] = nota_db_id
-                    st.success(f"✅ Transaksi **{kode_nota_preview}** berhasil disimpan!")
+                st.session_state['last_trx_id'] = nota_db_id
+                st.success(f"✅ Transaksi **{kode_nota_preview}** berhasil disimpan!")
 
-                    # FORMAT PESAN WA LENGKAP MENGGUNAKAN URLLIB PARSE QUOTE
-                    wa_phone = clean_phone(no_hp)
-                    pesan_wa_raw = (
-                        f"Halo Kak *{nama}*, terima kasih telah mencuci di *SM Laundry*! ✨\n\n"
-                        f"Berikut rincian nota transaksi Anda:\n\n"
-                        f"🧾 *NOTA LAUNDRY: #{kode_nota_preview}*\n"
-                        f"📅 *Tgl Masuk:* {waktu_sekarang.strftime('%d/%m/%Y %H:%M')}\n"
-                        f"⏰ *Estimasi Selesai:* {waktu_estimasi.strftime('%d/%m/%Y %H:%M')}\n\n"
-                        f"*Detail Layanan:*\n"
-                        f"• Layanan: {nama_layanan_full}\n"
-                        f"• Jumlah/Berat: {berat} {satuan_text}\n"
-                        f"• Pilihan Parfum: {parfum}\n"
-                        f"• Catatan: {catatan if catatan else '-'}\n\n"
-                        f"💵 *Total Biaya:* Rp {total_harga:,}\n"
-                        f"💳 *Status Bayar:* {status_bayar}\n"
-                        f"💰 *DP/Bayar:* Rp {dp_val:,}\n"
-                        f"⚠️ *SISA BAYAR: Rp {sisa_bayar:,}*\n\n"
-                        f"📍 _SM Laundry - Jl. Maritim 28 Socah Bangkalan_\n"
-                        f"📞 _WA: 085257357246_\n\n"
-                        f"Terima kasih atas kepercayaan Anda! 🙏"
-                    )
-                    pesan_wa_encoded = urllib.parse.quote(pesan_wa_raw)
-                    st.markdown(f"👉 [**📱 KLIK UNTUK KIRIM STRUK WA PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_wa_encoded})")
+                pesan_wa_raw = (
+                    f"Halo Kak *{nama}*, terima kasih telah mencuci di *SM Laundry*! ✨\n\n"
+                    f"Berikut rincian nota transaksi Anda:\n\n"
+                    f"🧾 *NOTA LAUNDRY: #{kode_nota_preview}*\n"
+                    f"📅 *Tgl Masuk:* {waktu_sekarang.strftime('%d/%m/%Y %H:%M')}\n"
+                    f"⏰ *Estimasi Selesai:* {waktu_estimasi.strftime('%d/%m/%Y %H:%M')}\n\n"
+                    f"*Detail Layanan:*\n"
+                    f"• Layanan: {nama_layanan_full}\n"
+                    f"• Jumlah/Berat: {berat} {satuan_text}\n"
+                    f"• Pilihan Parfum: {parfum}\n"
+                    f"• Catatan: {catatan if catatan else '-'}\n\n"
+                    f"💵 *Total Biaya:* Rp {total_harga:,}\n"
+                    f"💳 *Status Bayar:* {status_bayar}\n"
+                    f"💰 *DP/Bayar:* Rp {dp_val:,}\n"
+                    f"⚠️ *SISA BAYAR: Rp {sisa_bayar:,}*\n\n"
+                    f"📍 _SM Laundry - Jl. Maritim 28 Socah Bangkalan_\n"
+                    f"📞 _WA: 085257357246_\n\n"
+                    f"Terima kasih atas kepercayaan Anda! 🙏"
+                )
+                url_wa = create_wa_link(no_hp, pesan_wa_raw)
+                st.markdown(f"👉 [**📱 KLIK DISINI UNTUK KIRIM STRUK WA PELANGGAN**]({url_wa})")
 
         if 'last_trx_id' in st.session_state:
             st.divider()
@@ -817,10 +852,10 @@ elif menu == "📝 POS / Kasir Baru":
                 show_print_dialog(st.session_state['last_trx_id'])
 
 # ==========================================
-# MODUL EDIT / UBAH NOTA (KHUSUS OWNER)
+# MODUL EDIT / UBAH NOTA & KIRIM ULANG WA
 # ==========================================
 elif menu == "✏️ Edit / Ubah Nota":
-    st.header("✏️ Edit & Cetak Ulang Nota Transaksi (Khusus Owner)")
+    st.header("✏️ Edit & Cetak Ulang / Kirim Ulang WA Nota (Khusus Owner)")
 
     conn = get_connection()
     df_transaksi = pd.read_sql_query("SELECT * FROM transaksi ORDER BY id DESC", conn)
@@ -835,9 +870,33 @@ elif menu == "✏️ Edit / Ubah Nota":
         data_nota = df_transaksi.iloc[selected_idx]
         nota_id_selected = int(data_nota['id'])
 
-        if st.button("🖨️ Cetak Ulang Struk / Label Nota Ini"):
-            show_print_dialog(nota_id_selected)
+        # **PERBAIKAN BUG HP 3: DAPAT KIRIM ULANG NOTA WA DARI SINI**
+        pesan_wa_edit = (
+            f"Halo Kak *{data_nota['nama']}*, berikut update nota transaksi Anda di *SM Laundry*:\n\n"
+            f"🧾 *NOTA LAUNDRY: #{data_nota['kode_tampil']}*\n"
+            f"📅 *Tgl Masuk:* {data_nota['tgl_transaksi']}\n\n"
+            f"*Detail Layanan:*\n"
+            f"• Layanan: {data_nota['layanan']}\n"
+            f"• Jumlah/Berat: {data_nota['berat']}\n"
+            f"• Parfum: {data_nota['parfum']}\n"
+            f"• Catatan: {data_nota['catatan'] if data_nota['catatan'] else '-'}\n\n"
+            f"💵 *Total Biaya:* Rp {data_nota['total']:,}\n"
+            f"💳 *Status Bayar:* {data_nota['status_bayar']}\n"
+            f"💰 *DP/Bayar:* Rp {data_nota['bayar_dp']:,}\n"
+            f"⚠️ *SISA BAYAR: Rp {data_nota['sisa']:,}*\n\n"
+            f"📍 _SM Laundry - Jl. Maritim 28 Socah Bangkalan_\n"
+            f"📞 _WA: 085257357246_"
+        )
+        url_wa_edit = create_wa_link(data_nota['no_hp'], pesan_wa_edit)
 
+        c_act1, c_act2 = st.columns(2)
+        with c_act1:
+            if st.button("🖨️ Cetak Ulang Struk / Label Nota Ini", use_container_width=True):
+                show_print_dialog(nota_id_selected)
+        with c_act2:
+            st.markdown(f"👉 [**📱 KIRIM ULANG WA NOTA TERBARU**]({url_wa_edit})")
+
+        st.divider()
         with st.form("form_edit_nota"):
             st.subheader(f"🛠️ Edit Data {data_nota['kode_tampil']}")
             col_e1, col_e2 = st.columns(2)
@@ -871,7 +930,7 @@ elif menu == "✏️ Edit / Ubah Nota":
                 st.rerun()
 
 # ==========================================
-# MODUL PAPAN PRODUKSI (DENGAN INPUT FOTO)
+# MODUL PAPAN PRODUKSI
 # ==========================================
 elif menu == "🔄 Papan Status Produksi":
     st.header("🔄 Status Produksi Laundry & Dokumentasi Foto")
@@ -946,7 +1005,7 @@ elif menu == "🔄 Papan Status Produksi":
                         else:
                             foto_lipat_file = st.file_uploader("Upload Foto Pakaian Dilipat/Terbungkus", type=["jpg", "jpeg", "png"], key=f"upl_l_{row['id']}")
 
-                        if st.form_submit_button("💾 Selesai & Kirim Notifikasi WA"):
+                        if st.form_submit_button("💾 Selesai & Simpan Data"):
                             img_b64_lipat = process_img_to_base64(foto_lipat_file)
                             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             conn = get_connection()
@@ -958,22 +1017,34 @@ elif menu == "🔄 Papan Status Produksi":
                             conn.commit()
                             conn.close()
 
-                            wa_phone = clean_phone(row['no_hp'])
-                            pesan_selesai_raw = (
-                                f"Halo Kak *{row['nama']}*, laundry Anda sudah *SELESAI* & siap diambil! 🧺✨\n\n"
-                                f"🧾 *No. Nota:* #{kd}\n"
-                                f"📦 *Jumlah Bungkusan:* {jml_bungkus} Bungkusan/Bal\n"
-                                f"💰 *Sisa Pembayaran:* Rp {row['sisa']:,}\n\n"
-                                f"Silakan datang ke *SM Laundry* untuk pengambilan ya Kak. Terima kasih! 🙏"
-                            )
-                            pesan_selesai_encoded = urllib.parse.quote(pesan_selesai_raw)
-                            st.success("✅ Foto lipatan tersimpan permanen dan status laundry SELESAI!")
-                            st.markdown(f"👉 [**📱 KLIK UNTUK NOTIFIKASI WA SELESAI KE PELANGGAN**](https://wa.me/{wa_phone}?text={pesan_selesai_encoded})")
+                            st.session_state[f'wa_selesai_{row["id"]}'] = True
+                            st.success("✅ Pakaian SELESAI dilipat & tersimpan!")
+                            st.rerun()
+
+                    # WA Kirim di luar form agar link dapat diklik langsung di HP
+                    pesan_selesai_raw = (
+                        f"Halo Kak *{row['nama']}*, laundry Anda sudah *SELESAI* & siap diambil! 🧺✨\n\n"
+                        f"🧾 *No. Nota:* #{kd}\n"
+                        f"📦 *Jumlah Bungkusan:* {row['jumlah_bungkus'] if row['jumlah_bungkus'] else 1} Bungkusan/Bal\n"
+                        f"💰 *Sisa Pembayaran:* Rp {row['sisa']:,}\n\n"
+                        f"Silakan datang ke *SM Laundry* untuk pengambilan ya Kak. Terima kasih! 🙏"
+                    )
+                    url_wa_selesai = create_wa_link(row['no_hp'], pesan_selesai_raw)
+                    st.markdown(f"👉 [**📱 KIRIM NOTIFIKASI WA SELESAI KE PELANGGAN**]({url_wa_selesai})")
 
         with tab4:
             for _, row in df[df['status_laundry'] == 'Selesai'].iterrows():
                 kd = row['kode_nota'] if row['kode_nota'] else f"TRX/{row['id']}"
                 with st.expander(f"🟢 Nota {kd} - Kak {row['nama']} ({row['jumlah_bungkus']} BUNGKUS)"):
+                    pesan_selesai_raw = (
+                        f"Halo Kak *{row['nama']}*, mengingatkan kembali laundry Anda sudah *SELESAI* & siap diambil! 🧺✨\n\n"
+                        f"🧾 *No. Nota:* #{kd}\n"
+                        f"💰 *Sisa Pembayaran:* Rp {row['sisa']:,}\n\n"
+                        f"Silakan datang ke *SM Laundry*. Terima kasih!"
+                    )
+                    url_wa_selesai = create_wa_link(row['no_hp'], pesan_selesai_raw)
+                    st.markdown(f"👉 [**📱 KIRIM / RE-SEND WA NOTIFIKASI SELESAI**]({url_wa_selesai})")
+                    
                     if st.button("🤝 Diserahkan ke Pelanggan", key=f"btn_ambil_{row['id']}"):
                         conn = get_connection()
                         c = conn.cursor()
@@ -1002,7 +1073,6 @@ elif menu == "💰 Laporan Keuangan":
         
         now = datetime.now()
 
-        # --- TAB HARIAN ---
         with tab_harian:
             st.subheader("📅 Laporan Keuangan Harian")
             tgl_pilih = st.date_input("Pilih Tanggal:", value=now.date(), key="filter_tgl_harian")
@@ -1023,7 +1093,6 @@ elif menu == "💰 Laporan Keuangan":
             else:
                 st.info("Tidak ada transaksi pada tanggal ini.")
 
-        # --- TAB MINGGUAN ---
         with tab_mingguan:
             st.subheader("🗓️ Laporan Keuangan Mingguan (7 Hari Terakhir)")
             
@@ -1044,7 +1113,6 @@ elif menu == "💰 Laporan Keuangan":
             else:
                 st.info("Tidak ada transaksi dalam 7 hari terakhir.")
 
-        # --- TAB BULANAN ---
         with tab_bulanan:
             st.subheader("📆 Laporan Keuangan Bulanan")
             
@@ -1070,7 +1138,6 @@ elif menu == "💰 Laporan Keuangan":
             else:
                 st.info(f"Tidak ada transaksi pada bulan {bulan_pilih}/{tahun_pilih}.")
 
-        # --- TAB SEMUA ---
         with tab_semua:
             st.subheader("📑 Keseluruhan Laporan Transaksi")
             st.metric("📈 Total Akumulasi Omset Semua", f"Rp {df_all['total'].sum():,}")
@@ -1184,7 +1251,6 @@ elif menu == "⚙️ Pengaturan Master Data":
     st.header("⚙️ Pengaturan Master Data & Akun Pengguna")
     tab_bt, tab_usr, tab_l, tab_p, tab_pel = st.tabs(["🛜 Koneksi Printer Bluetooth", "👥 Kelola Akun Pengguna", "🏷️ Master Layanan", "🌸 Master Parfum", "👥 Master Pelanggan"])
 
-    # --- TAB KONEKSI BLUETOOTH ---
     with tab_bt:
         st.subheader("📱 Pengaturan & Tes Koneksi Printer Thermal Bluetooth")
         st.write("Pastikan **Bluetooth** & **Lokasi (GPS)** pada perangkat HP/Perangkat Kasir Anda aktif. Hubungkan printer thermal via menu di bawah:")
@@ -1201,7 +1267,6 @@ elif menu == "⚙️ Pengaturan Master Data":
             </div>""", height=180
         )
 
-    # --- TAB KELOLA AKUN PENGGUNA ---
     with tab_usr:
         st.subheader("➕ Tambah Akun Pengguna / Pegawai Baru")
         
@@ -1278,7 +1343,6 @@ elif menu == "⚙️ Pengaturan Master Data":
                                 st.success(f"🗑️ Akun {u_row['nama_user']} telah dihapus!")
                                 st.rerun()
 
-    # --- TAB MASTER LAYANAN ---
     with tab_l:
         st.subheader("➕ Tambah Layanan Baru / Unik")
         
@@ -1374,7 +1438,6 @@ elif menu == "⚙️ Pengaturan Master Data":
                             st.success("🗑️ Layanan berhasil dihapus!")
                             st.rerun()
 
-    # --- TAB MASTER PARFUM ---
     with tab_p:
         st.subheader("🌸 Kelola Master Parfum")
         
@@ -1413,7 +1476,6 @@ elif menu == "⚙️ Pengaturan Master Data":
                         conn.close()
                         st.rerun()
 
-    # --- TAB MASTER PELANGGAN ---
     with tab_pel:
         st.subheader("👥 Edit & Hapus Master Pelanggan")
         
